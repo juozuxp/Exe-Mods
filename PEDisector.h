@@ -19,30 +19,30 @@ typedef struct _UnMappedImportDescriptor
 {
 	unsigned long FirstThunk;
 	unsigned long OriginalFirstThunk;
-	IMAGE_IMPORT_DESCRIPTOR * ImportDescriptor;
+	IMAGE_IMPORT_DESCRIPTOR* ImportDescriptor;
 	IMAGE_SECTION_HEADER* ImportSection;
-} UnMappedImportDescriptor, *PUnMappedImportDescriptor;
+} UnMappedImportDescriptor, * PUnMappedImportDescriptor;
 
 typedef struct _UnMappedImportHeader
 {
 	IMAGE_IMPORT_DESCRIPTOR* PEImportDescriptor;
 	IMAGE_SECTION_HEADER* DescriptorSection;
-} UnMappedImportHeader, *PUnMappedImportHeader;
+} UnMappedImportHeader, * PUnMappedImportHeader;
 
 typedef struct _UnMappedExportDescriptor
 {
 	unsigned long ExportOffset;
 	IMAGE_SECTION_HEADER* ExportSection;
-} UnMappedExportDescriptor, *PUnMappedExportDescriptor;
+} UnMappedExportDescriptor, * PUnMappedExportDescriptor;
 
 typedef struct _MappedImportDescriptor
 {
 	void** OriginalFirstThunk;
 	void** FirstThunk;
 	IMAGE_IMPORT_DESCRIPTOR* ImportDescriptor;
-} MappedImportDescriptor, *PMappedImportDescriptor;
+} MappedImportDescriptor, * PMappedImportDescriptor;
 
-static GeneralErrorCast FindAddressSection(void* PEBuffer, void * Address, IMAGE_SECTION_HEADER** AddressHeader)
+static GeneralErrorCast FindAddressSection(void* PEBuffer, void* Address, IMAGE_SECTION_HEADER** AddressHeader)
 {
 	if (!PEBuffer)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
@@ -51,16 +51,16 @@ static GeneralErrorCast FindAddressSection(void* PEBuffer, void * Address, IMAGE
 	if (!AddressHeader)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_3) | 1;
 
-	IMAGE_SECTION_HEADER* SectionHeader;
-	IMAGE_FILE_HEADER* FileHeader;
 	IMAGE_DOS_HEADER* DosHeader;
-	IMAGE_NT_HEADERS* NTHeaders;
+	IMAGE_FILE_HEADER* FileHeader;
+	IMAGE_NT_HEADERS32* NTHeaders32;
+	IMAGE_SECTION_HEADER* SectionHeader;
 
 	DosHeader = ((IMAGE_DOS_HEADER*)PEBuffer);
-	NTHeaders = ((IMAGE_NT_HEADERS*)(((char*)PEBuffer) + DosHeader->e_lfanew));
-	FileHeader = &NTHeaders->FileHeader;
+	NTHeaders32 = ((IMAGE_NT_HEADERS32*)(((char*)PEBuffer) + DosHeader->e_lfanew));
+	FileHeader = &NTHeaders32->FileHeader;
 
-	SectionHeader = IMAGE_FIRST_SECTION(NTHeaders);
+	SectionHeader = IMAGE_FIRST_SECTION(NTHeaders32);
 	for (unsigned long i = 0; i < FileHeader->NumberOfSections; i++, SectionHeader++)
 		if ((((char*)Address) - ((char*)PEBuffer)) >= SectionHeader->VirtualAddress && (((char*)Address) - ((char*)PEBuffer)) < (SectionHeader->VirtualAddress + SectionHeader->SizeOfRawData))
 			break;
@@ -69,7 +69,7 @@ static GeneralErrorCast FindAddressSection(void* PEBuffer, void * Address, IMAGE
 	return STATUS_SUCCESS;
 }
 
-static GeneralErrorCast FindImportByNameMapped(void * PEBuffer, const char * ImportName, MappedImportDescriptor* ImportDesc)
+static GeneralErrorCast FindImportByNameMapped(void* PEBuffer, const char* ImportName, MappedImportDescriptor* ImportDesc)
 {
 	if (!PEBuffer)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
@@ -77,151 +77,185 @@ static GeneralErrorCast FindImportByNameMapped(void * PEBuffer, const char * Imp
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_2) | 1;
 	if (!ImportDesc)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_3) | 1;
-
-	memset(ImportDesc, 0, sizeof(MappedImportDescriptor));
-
-	IMAGE_DOS_HEADER * DosHeader;
-	IMAGE_NT_HEADERS * NTHeaders;
-	IMAGE_OPTIONAL_HEADER * OptionalHeader;
-	IMAGE_IMPORT_DESCRIPTOR * ImportDescriptor;
-
-	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
-	NTHeaders = (IMAGE_NT_HEADERS*)((char*)PEBuffer + DosHeader->e_lfanew);
-	OptionalHeader = &NTHeaders->OptionalHeader;
-
-	if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
-
-	ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
-	for (; ImportDescriptor->Name; ImportDescriptor++)
-	{
-		void ** OriginalFirstThunk = (void**)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk);
-		void ** FirstThunk = (void**)((char*)PEBuffer + ImportDescriptor->FirstThunk);
-
-		if (!OriginalFirstThunk)
-			OriginalFirstThunk = FirstThunk;
-
-		for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
-		{
-			if (!IMAGE_SNAP_BY_ORDINAL((unsigned long long)*OriginalFirstThunk))
-			{
-				IMAGE_IMPORT_BY_NAME * ImportByName = (IMAGE_IMPORT_BY_NAME*)((char*)PEBuffer + (unsigned long long)*OriginalFirstThunk);
-				if (!_stricmp(ImportByName->Name, ImportName))
-				{
-					ImportDesc->OriginalFirstThunk = OriginalFirstThunk;
-					ImportDesc->FirstThunk = FirstThunk;
-					ImportDesc->ImportDescriptor = ImportDescriptor;
-					return STATUS_SUCCESS;
-				}
-			}
-		}
-		
-	}
-	return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_NOT_FOUND) | 1;
-}
-
-static GeneralErrorCast FindImportByNameUnMapped(void * PEBuffer, const char * ImportName, UnMappedImportDescriptor* ImportDesc)
-{
-	if (!PEBuffer)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
-	if (!ImportName)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_2) | 1;
-	if (!ImportDesc)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_3) | 1;
-
-	memset(ImportDesc, 0, sizeof(UnMappedImportDescriptor));
-
-	IMAGE_DOS_HEADER * DosHeader;
-	IMAGE_NT_HEADERS * NTHeaders;
-	IMAGE_SECTION_HEADER* ImportSection;
-	IMAGE_OPTIONAL_HEADER * OptionalHeader;
-	IMAGE_IMPORT_DESCRIPTOR * ImportDescriptor;
-
-	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
-	NTHeaders = (IMAGE_NT_HEADERS*)((char*)PEBuffer + DosHeader->e_lfanew);
-	OptionalHeader = &NTHeaders->OptionalHeader;
-
-	if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
-
-	FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress), &ImportSection);
-	ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
-	for (unsigned long i = 0; (char*)ImportDescriptor - (char*)PEBuffer - ImportSection->VirtualAddress < ImportSection->SizeOfRawData && ImportDescriptor->Name; i++, ImportDescriptor++)
-	{
-		void ** OriginalFirstThunk = (void**)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
-		void ** FirstThunk = (void**)((char*)PEBuffer + ImportDescriptor->FirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
-
-		if (!OriginalFirstThunk)
-			OriginalFirstThunk = FirstThunk;
-
-		for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
-		{
-			if (!IMAGE_SNAP_BY_ORDINAL((unsigned long long)*OriginalFirstThunk))
-			{
-				IMAGE_IMPORT_BY_NAME * ImportByName = (IMAGE_IMPORT_BY_NAME*)((char*)PEBuffer + (unsigned long long)*OriginalFirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
-				if (!_stricmp(ImportByName->Name, ImportName))
-				{
-					ImportDesc->FirstThunk = ((((char*)FirstThunk) - ImportSection->PointerToRawData + ImportSection->VirtualAddress) - ((char*)PEBuffer));
-					ImportDesc->OriginalFirstThunk = ((((char*)OriginalFirstThunk) - ImportSection->PointerToRawData + ImportSection->VirtualAddress) - ((char*)PEBuffer));
-					ImportDesc->ImportDescriptor = ImportDescriptor;
-					ImportDesc->ImportSection = ImportSection;
-					return STATUS_SUCCESS;
-				}
-			}
-		}
-	}
-	return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_NOT_FOUND) | 1;
-}
-
-static GeneralErrorCast FindImportByAddressMapped(void* PEBuffer, void* Address, IMAGE_IMPORT_DESCRIPTOR** ImportDesc)
-{
-	if (!PEBuffer)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
-	if (!Address)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_2) | 1;
-	if (!ImportDesc)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_3) | 1;
-
-	*ImportDesc = 0;
 
 	IMAGE_DOS_HEADER* DosHeader;
-	IMAGE_NT_HEADERS* NTHeaders;
-	IMAGE_OPTIONAL_HEADER* OptionalHeader;
+	IMAGE_NT_HEADERS32* NTHeaders32;
 	IMAGE_IMPORT_DESCRIPTOR* ImportDescriptor;
 
 	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
-	NTHeaders = (IMAGE_NT_HEADERS*)((char*)PEBuffer + DosHeader->e_lfanew);
-	OptionalHeader = &NTHeaders->OptionalHeader;
+	NTHeaders32 = (IMAGE_NT_HEADERS32*)((char*)PEBuffer + DosHeader->e_lfanew);
 
-	if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
-
-	ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
-	for (; ImportDescriptor->Name; ImportDescriptor++)
+	if (NTHeaders32->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
 	{
-		void** OriginalFirstThunk = (void**)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk);
-		void** FirstThunk = (void**)((char*)PEBuffer + ImportDescriptor->FirstThunk);
+		IMAGE_OPTIONAL_HEADER64* OptionalHeader;
+		IMAGE_NT_HEADERS64* NTHeaders;
 
-		if (!OriginalFirstThunk)
-			OriginalFirstThunk = FirstThunk;
+		NTHeaders = ((IMAGE_NT_HEADERS64*)NTHeaders32);
+		OptionalHeader = &NTHeaders->OptionalHeader;
 
-		for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+		for (; ImportDescriptor->Name; ImportDescriptor++)
 		{
-			if (!IMAGE_SNAP_BY_ORDINAL((unsigned long long) * OriginalFirstThunk))
+			unsigned long long* OriginalFirstThunk = (unsigned long long*)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk);
+			unsigned long long* FirstThunk = (unsigned long long*)((char*)PEBuffer + ImportDescriptor->FirstThunk);
+
+			if (!OriginalFirstThunk)
+				OriginalFirstThunk = FirstThunk;
+
+			for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
 			{
-				IMAGE_IMPORT_BY_NAME* ImportByName = (IMAGE_IMPORT_BY_NAME*)((char*)PEBuffer + (unsigned long long)*OriginalFirstThunk);
-				if (*FirstThunk == Address)
+				if (!IMAGE_SNAP_BY_ORDINAL64(*OriginalFirstThunk))
 				{
-					*ImportDesc = ImportDescriptor;
-					return STATUS_SUCCESS;
+					IMAGE_IMPORT_BY_NAME* ImportByName = (IMAGE_IMPORT_BY_NAME*)((char*)PEBuffer + *OriginalFirstThunk);
+					if (!_stricmp(ImportByName->Name, ImportName))
+					{
+						ImportDesc->OriginalFirstThunk = ((void**)OriginalFirstThunk);
+						ImportDesc->FirstThunk = ((void**)FirstThunk);
+						ImportDesc->ImportDescriptor = ImportDescriptor;
+						return STATUS_SUCCESS;
+					}
 				}
 			}
 		}
 	}
+	else
+	{
+		IMAGE_OPTIONAL_HEADER32* OptionalHeader;
+
+		OptionalHeader = &NTHeaders32->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+		for (; ImportDescriptor->Name; ImportDescriptor++)
+		{
+			unsigned long* OriginalFirstThunk = (unsigned long*)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk);
+			unsigned long* FirstThunk = (unsigned long*)((char*)PEBuffer + ImportDescriptor->FirstThunk);
+
+			if (!OriginalFirstThunk)
+				OriginalFirstThunk = FirstThunk;
+
+			for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
+			{
+				if (!IMAGE_SNAP_BY_ORDINAL32(*OriginalFirstThunk))
+				{
+					IMAGE_IMPORT_BY_NAME* ImportByName = (IMAGE_IMPORT_BY_NAME*)((char*)PEBuffer + *OriginalFirstThunk);
+					if (!_stricmp(ImportByName->Name, ImportName))
+					{
+						ImportDesc->OriginalFirstThunk = ((void**)OriginalFirstThunk);
+						ImportDesc->FirstThunk = ((void**)FirstThunk);
+						ImportDesc->ImportDescriptor = ImportDescriptor;
+						return STATUS_SUCCESS;
+					}
+				}
+			}
+		}
+	}
+
 	return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_NOT_FOUND) | 1;
 }
 
-static GeneralErrorCast FindImportByAddressUnMapped(void * PEBuffer, void * Address, UnMappedImportDescriptor* ImportDesc)
+static GeneralErrorCast FindImportByNameUnMapped(void* PEBuffer, const char* ImportName, UnMappedImportDescriptor* ImportDesc)
+{
+	if (!PEBuffer)
+		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
+	if (!ImportName)
+		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_2) | 1;
+	if (!ImportDesc)
+		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_3) | 1;
+
+	IMAGE_DOS_HEADER* DosHeader;
+	IMAGE_NT_HEADERS32* NTHeaders32;
+	IMAGE_SECTION_HEADER* ImportSection;
+
+	IMAGE_IMPORT_DESCRIPTOR* ImportDescriptor;
+
+	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
+	NTHeaders32 = (IMAGE_NT_HEADERS32*)((char*)PEBuffer + DosHeader->e_lfanew);
+
+	if (NTHeaders32->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
+	{
+		IMAGE_OPTIONAL_HEADER64* OptionalHeader;
+		IMAGE_NT_HEADERS64* NTHeaders;
+
+		NTHeaders = ((IMAGE_NT_HEADERS64*)NTHeaders32);
+		OptionalHeader = &NTHeaders->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress), &ImportSection);
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+		for (unsigned long i = 0; (char*)ImportDescriptor - (char*)PEBuffer - ImportSection->VirtualAddress < ImportSection->SizeOfRawData && ImportDescriptor->Name; i++, ImportDescriptor++)
+		{
+			unsigned long long* OriginalFirstThunk = (unsigned long long*)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+			unsigned long long* FirstThunk = (unsigned long long*)((char*)PEBuffer + ImportDescriptor->FirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+
+			if (!OriginalFirstThunk)
+				OriginalFirstThunk = FirstThunk;
+
+			for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
+			{
+				if (!IMAGE_SNAP_BY_ORDINAL64(*OriginalFirstThunk))
+				{
+					IMAGE_IMPORT_BY_NAME* ImportByName = (IMAGE_IMPORT_BY_NAME*)((char*)PEBuffer + *OriginalFirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+					if (!_stricmp(ImportByName->Name, ImportName))
+					{
+						ImportDesc->FirstThunk = ((((char*)FirstThunk) - ImportSection->PointerToRawData + ImportSection->VirtualAddress) - ((char*)PEBuffer));
+						ImportDesc->OriginalFirstThunk = ((((char*)OriginalFirstThunk) - ImportSection->PointerToRawData + ImportSection->VirtualAddress) - ((char*)PEBuffer));
+						ImportDesc->ImportDescriptor = ImportDescriptor;
+						ImportDesc->ImportSection = ImportSection;
+						return STATUS_SUCCESS;
+					}
+				}
+			}
+		}
+	}
+	else
+	{
+		IMAGE_OPTIONAL_HEADER32* OptionalHeader;
+
+		OptionalHeader = &NTHeaders32->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress), &ImportSection);
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+		for (unsigned long i = 0; (char*)ImportDescriptor - (char*)PEBuffer - ImportSection->VirtualAddress < ImportSection->SizeOfRawData && ImportDescriptor->Name; i++, ImportDescriptor++)
+		{
+			unsigned long* OriginalFirstThunk = (unsigned long*)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+			unsigned long* FirstThunk = (unsigned long*)((char*)PEBuffer + ImportDescriptor->FirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+
+			if (!OriginalFirstThunk)
+				OriginalFirstThunk = FirstThunk;
+
+			for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
+			{
+				if (!IMAGE_SNAP_BY_ORDINAL32(*OriginalFirstThunk))
+				{
+					IMAGE_IMPORT_BY_NAME* ImportByName = (IMAGE_IMPORT_BY_NAME*)((char*)PEBuffer + *OriginalFirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+					if (!_stricmp(ImportByName->Name, ImportName))
+					{
+						ImportDesc->FirstThunk = ((((char*)FirstThunk) - ImportSection->PointerToRawData + ImportSection->VirtualAddress) - ((char*)PEBuffer));
+						ImportDesc->OriginalFirstThunk = ((((char*)OriginalFirstThunk) - ImportSection->PointerToRawData + ImportSection->VirtualAddress) - ((char*)PEBuffer));
+						ImportDesc->ImportDescriptor = ImportDescriptor;
+						ImportDesc->ImportSection = ImportSection;
+						return STATUS_SUCCESS;
+					}
+				}
+			}
+		}
+	}
+
+	return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_NOT_FOUND) | 1;
+}
+
+static GeneralErrorCast FindImportByRangeMapped(void* PEBuffer, void* Address, unsigned long long Range, MappedImportDescriptor* ImportDesc)
 {
 	if (!PEBuffer)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
@@ -230,49 +264,169 @@ static GeneralErrorCast FindImportByAddressUnMapped(void * PEBuffer, void * Addr
 	if (!ImportDesc)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_3) | 1;
 
-	memset(ImportDesc, 0, sizeof(UnMappedImportDescriptor));
-
-	IMAGE_DOS_HEADER * DosHeader;
-	IMAGE_NT_HEADERS * NTHeaders;
-	IMAGE_SECTION_HEADER* ImportSection;
-	IMAGE_OPTIONAL_HEADER * OptionalHeader;
-	IMAGE_IMPORT_DESCRIPTOR * ImportDescriptor;
+	IMAGE_DOS_HEADER* DosHeader;
+	IMAGE_NT_HEADERS32* NTHeaders32;
+	IMAGE_IMPORT_DESCRIPTOR* ImportDescriptor;
 
 	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
-	NTHeaders = (IMAGE_NT_HEADERS*)((char*)PEBuffer + DosHeader->e_lfanew);
-	OptionalHeader = &NTHeaders->OptionalHeader;
+	NTHeaders32 = (IMAGE_NT_HEADERS32*)((char*)PEBuffer + DosHeader->e_lfanew);
 
-	if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
-
-	FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress), &ImportSection);
-	ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
-	for (; ImportDescriptor->Name; ImportDescriptor++)
+	if (NTHeaders32->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
 	{
-		void ** OriginalFirstThunk = (void**)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
-		void ** FirstThunk = (void**)((char*)PEBuffer + ImportDescriptor->FirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+		IMAGE_OPTIONAL_HEADER64* OptionalHeader;
+		IMAGE_NT_HEADERS64* NTHeaders;
 
-		if (!OriginalFirstThunk)
-			OriginalFirstThunk = FirstThunk;
+		NTHeaders = ((IMAGE_NT_HEADERS64*)NTHeaders32);
+		OptionalHeader = &NTHeaders->OptionalHeader;
 
-		for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+		for (; ImportDescriptor->Name; ImportDescriptor++)
 		{
-			if (!IMAGE_SNAP_BY_ORDINAL((unsigned long long)*OriginalFirstThunk))
+			unsigned long long* OriginalFirstThunk = (unsigned long long*)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk);
+			unsigned long long* FirstThunk = (unsigned long long*)((char*)PEBuffer + ImportDescriptor->FirstThunk);
+
+			if (!OriginalFirstThunk)
+				OriginalFirstThunk = FirstThunk;
+
+			for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
 			{
-				IMAGE_IMPORT_BY_NAME * ImportByName = (IMAGE_IMPORT_BY_NAME*)((char*)PEBuffer + (unsigned long long)*OriginalFirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
-				if (((char*)PEBuffer + (unsigned __int64)*FirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData) == Address)
+				if (!IMAGE_SNAP_BY_ORDINAL64(*OriginalFirstThunk))
 				{
-					ImportDesc->ImportDescriptor = ImportDescriptor;
-					ImportDesc->ImportSection = ImportSection;
-					return STATUS_SUCCESS;
+					IMAGE_IMPORT_BY_NAME* ImportByName = (IMAGE_IMPORT_BY_NAME*)((char*)PEBuffer + *OriginalFirstThunk);
+					if (*FirstThunk - ((unsigned long long)Address) <= Range)
+					{
+						ImportDesc->ImportDescriptor = ImportDescriptor;
+
+						ImportDesc->FirstThunk = ((void**)FirstThunk);
+						ImportDesc->OriginalFirstThunk = ((void**)OriginalFirstThunk);
+
+						return STATUS_SUCCESS;
+					}
 				}
 			}
 		}
 	}
+	else
+	{
+		IMAGE_OPTIONAL_HEADER32* OptionalHeader;
+
+		OptionalHeader = &NTHeaders32->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+		for (; ImportDescriptor->Name; ImportDescriptor++)
+		{
+			unsigned long* OriginalFirstThunk = (unsigned long*)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk);
+			unsigned long* FirstThunk = (unsigned long*)((char*)PEBuffer + ImportDescriptor->FirstThunk);
+
+			if (!OriginalFirstThunk)
+				OriginalFirstThunk = FirstThunk;
+
+			for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
+			{
+				if (!IMAGE_SNAP_BY_ORDINAL32(*OriginalFirstThunk))
+				{
+					IMAGE_IMPORT_BY_NAME* ImportByName = (IMAGE_IMPORT_BY_NAME*)((char*)PEBuffer + *OriginalFirstThunk);
+					if (*FirstThunk - ((unsigned long)Address) <= Range)
+					{
+						ImportDesc->ImportDescriptor = ImportDescriptor;
+
+						ImportDesc->FirstThunk = ((void**)FirstThunk);
+						ImportDesc->OriginalFirstThunk = ((void**)OriginalFirstThunk);
+
+						return STATUS_SUCCESS;
+					}
+				}
+			}
+		}
+	}
+
 	return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_NOT_FOUND) | 1;
 }
 
-static GeneralErrorCast CountImportsMapped(void* PEBuffer, unsigned long* ModuleCount, unsigned long* ImportCount)
+static GeneralErrorCast CountImportsMapped(void* PEBuffer, unsigned long long* ModuleCount, unsigned long long* ImportCount)
+{
+	if (!PEBuffer)
+		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
+	if (!ImportCount && !ModuleCount)
+		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_2) | 1;
+
+	if (ModuleCount)
+		(*ModuleCount) = 0;
+	if (ImportCount)
+		(*ImportCount) = 0;
+
+	IMAGE_DOS_HEADER* DosHeader;
+	IMAGE_NT_HEADERS32* NTHeaders32;
+	IMAGE_IMPORT_DESCRIPTOR* ImportDescriptor;
+
+	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
+	NTHeaders32 = (IMAGE_NT_HEADERS32*)((char*)PEBuffer + DosHeader->e_lfanew);
+
+	if (NTHeaders32->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
+	{
+		IMAGE_OPTIONAL_HEADER64* OptionalHeader;
+		IMAGE_NT_HEADERS64* NTHeaders;
+
+		NTHeaders = ((IMAGE_NT_HEADERS64*)NTHeaders32);
+		OptionalHeader = &NTHeaders->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+		for (; ImportDescriptor->Name; ImportDescriptor++)
+		{
+			unsigned long long* OriginalFirstThunk = (unsigned long long*)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk);
+			unsigned long long* FirstThunk = (unsigned long long*)((char*)PEBuffer + ImportDescriptor->FirstThunk);
+
+			if (ModuleCount)
+				(*ModuleCount)++;
+
+			if (!OriginalFirstThunk)
+				OriginalFirstThunk = FirstThunk;
+
+			if (ImportCount)
+				for (; *OriginalFirstThunk; OriginalFirstThunk++)
+					(*ImportCount)++;
+		}
+	}
+	else
+	{
+		IMAGE_OPTIONAL_HEADER32* OptionalHeader;
+
+		OptionalHeader = &NTHeaders32->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+		for (; ImportDescriptor->Name; ImportDescriptor++)
+		{
+			unsigned long* OriginalFirstThunk = (unsigned long*)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk);
+			unsigned long* FirstThunk = (unsigned long*)((char*)PEBuffer + ImportDescriptor->FirstThunk);
+
+			if (ModuleCount)
+				(*ModuleCount)++;
+
+			if (!OriginalFirstThunk)
+				OriginalFirstThunk = FirstThunk;
+
+			if (ImportCount)
+				for (; *OriginalFirstThunk; OriginalFirstThunk++)
+					(*ImportCount)++;
+		}
+	}
+
+	return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_NOT_FOUND) | 1;
+}
+
+static GeneralErrorCast CountImportsUnMapped(void* PEBuffer, unsigned long* ModuleCount, unsigned long* ImportCount)
 {
 	if (!PEBuffer)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
@@ -284,37 +438,74 @@ static GeneralErrorCast CountImportsMapped(void* PEBuffer, unsigned long* Module
 		(*ImportCount) = 0;
 
 	IMAGE_DOS_HEADER* DosHeader;
-	IMAGE_NT_HEADERS* NTHeaders;
-	IMAGE_OPTIONAL_HEADER* OptionalHeader;
+	IMAGE_NT_HEADERS32* NTHeaders32;
+	IMAGE_SECTION_HEADER* ImportSection;
 	IMAGE_IMPORT_DESCRIPTOR* ImportDescriptor;
 
 	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
-	NTHeaders = (IMAGE_NT_HEADERS*)((char*)PEBuffer + DosHeader->e_lfanew);
-	OptionalHeader = &NTHeaders->OptionalHeader;
+	NTHeaders32 = (IMAGE_NT_HEADERS32*)((char*)PEBuffer + DosHeader->e_lfanew);
 
-	if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
-
-	ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
-	for (; ImportDescriptor->Name; ImportDescriptor++)
+	if (NTHeaders32->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
 	{
-		void** OriginalFirstThunk = (void**)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk);
-		void** FirstThunk = (void**)((char*)PEBuffer + ImportDescriptor->FirstThunk);
+		IMAGE_OPTIONAL_HEADER64* OptionalHeader;
+		IMAGE_NT_HEADERS64* NTHeaders;
 
-		if (ModuleCount)
-			(*ModuleCount)++;
+		NTHeaders = ((IMAGE_NT_HEADERS64*)NTHeaders32);
+		OptionalHeader = &NTHeaders->OptionalHeader;
 
-		if (!OriginalFirstThunk)
-			OriginalFirstThunk = FirstThunk;
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
 
-		for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
+		FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress), &ImportSection);
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+		for (; ImportDescriptor->Name; ImportDescriptor++)
+		{
+			unsigned long long* OriginalFirstThunk = (unsigned long long*)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+			unsigned long long* FirstThunk = (unsigned long long*)((char*)PEBuffer + ImportDescriptor->FirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+
+			if (ModuleCount)
+				(*ModuleCount)++;
+
+			if (!OriginalFirstThunk)
+				OriginalFirstThunk = FirstThunk;
+
 			if (ImportCount)
-				(*ImportCount)++;
+				for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
+					(*ImportCount)++;
+		}
 	}
-	return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_NOT_FOUND) | 1;
+	else
+	{
+		IMAGE_OPTIONAL_HEADER32* OptionalHeader;
+
+		OptionalHeader = &NTHeaders32->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress), &ImportSection);
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+		for (; ImportDescriptor->Name; ImportDescriptor++)
+		{
+			unsigned long* OriginalFirstThunk = (unsigned long*)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+			unsigned long* FirstThunk = (unsigned long*)((char*)PEBuffer + ImportDescriptor->FirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+
+			if (ModuleCount)
+				(*ModuleCount)++;
+
+			if (!OriginalFirstThunk)
+				OriginalFirstThunk = FirstThunk;
+
+			if (ImportCount)
+				for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
+					(*ImportCount)++;
+		}
+	}
+
+	return STATUS_SUCCESS;
 }
 
-static GeneralErrorCast FindImportHeaderByPENameMapped(void* PEBuffer, const char * ImportPEName, IMAGE_IMPORT_DESCRIPTOR ** Descriptor)
+static GeneralErrorCast FindImportHeaderByPENameMapped(void* PEBuffer, const char* ImportPEName, IMAGE_IMPORT_DESCRIPTOR** Descriptor)
 {
 	if (!PEBuffer)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
@@ -324,18 +515,37 @@ static GeneralErrorCast FindImportHeaderByPENameMapped(void* PEBuffer, const cha
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_3) | 1;
 
 	IMAGE_DOS_HEADER* DosHeader;
-	IMAGE_NT_HEADERS* NTHeaders;
-	IMAGE_OPTIONAL_HEADER* OptionalHeader;
+	IMAGE_NT_HEADERS32* NTHeaders32;
 	IMAGE_IMPORT_DESCRIPTOR* ImportDescriptor;
 
 	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
-	NTHeaders = (IMAGE_NT_HEADERS*)((char*)PEBuffer + DosHeader->e_lfanew);
-	OptionalHeader = &NTHeaders->OptionalHeader;
+	NTHeaders32 = (IMAGE_NT_HEADERS32*)((char*)PEBuffer + DosHeader->e_lfanew);
 
-	if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+	if (NTHeaders32->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
+	{
+		IMAGE_OPTIONAL_HEADER64* OptionalHeader;
+		IMAGE_NT_HEADERS64* NTHeaders;
 
-	ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+		NTHeaders = ((IMAGE_NT_HEADERS64*)NTHeaders32);
+		OptionalHeader = &NTHeaders->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+	}
+	else
+	{
+		IMAGE_OPTIONAL_HEADER32* OptionalHeader;
+
+		OptionalHeader = &NTHeaders32->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+	}
+
 	for (; ImportDescriptor->Name; ImportDescriptor++)
 	{
 		if (!stricmp(((char*)PEBuffer) + ImportDescriptor->Name, ImportPEName))
@@ -358,20 +568,40 @@ static GeneralErrorCast FindImportHeaderByPENameUnMapped(void* PEBuffer, const c
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_3) | 1;
 
 	IMAGE_DOS_HEADER* DosHeader;
-	IMAGE_NT_HEADERS* NTHeaders;
+	IMAGE_NT_HEADERS32* NTHeaders32;
 	IMAGE_SECTION_HEADER* ImportSection;
-	IMAGE_OPTIONAL_HEADER* OptionalHeader;
 	IMAGE_IMPORT_DESCRIPTOR* ImportDescriptor;
 
 	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
-	NTHeaders = (IMAGE_NT_HEADERS*)((char*)PEBuffer + DosHeader->e_lfanew);
-	OptionalHeader = &NTHeaders->OptionalHeader;
+	NTHeaders32 = (IMAGE_NT_HEADERS32*)((char*)PEBuffer + DosHeader->e_lfanew);
 
-	if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+	if (NTHeaders32->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
+	{
+		IMAGE_OPTIONAL_HEADER64* OptionalHeader;
+		IMAGE_NT_HEADERS64* NTHeaders;
 
-	FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress), &ImportSection);
-	ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+		NTHeaders = ((IMAGE_NT_HEADERS64*)NTHeaders32);
+		OptionalHeader = &NTHeaders->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress), &ImportSection);
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+	}
+	else
+	{
+		IMAGE_OPTIONAL_HEADER32* OptionalHeader;
+
+		OptionalHeader = &NTHeaders32->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress), &ImportSection);
+		ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
+	}
+
 	for (; ImportDescriptor->Name; ImportDescriptor++)
 	{
 		if (!stricmp(((char*)PEBuffer) + ImportDescriptor->Name - ImportSection->VirtualAddress + ImportSection->PointerToRawData, ImportPEName))
@@ -385,51 +615,7 @@ static GeneralErrorCast FindImportHeaderByPENameUnMapped(void* PEBuffer, const c
 	return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_NOT_FOUND) | 1;
 }
 
-static GeneralErrorCast CountImportsUnMapped(void* PEBuffer, unsigned long * ModuleCount, unsigned long * ImportCount)
-{
-	if (!PEBuffer)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
-	if (!ImportCount && !ModuleCount)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_2) | 1;
-	if (ModuleCount)
-		(*ModuleCount) = 0;
-	if (ImportCount)
-		(*ImportCount) = 0;
-
-	IMAGE_DOS_HEADER* DosHeader;
-	IMAGE_NT_HEADERS* NTHeaders;
-	IMAGE_SECTION_HEADER* ImportSection;
-	IMAGE_OPTIONAL_HEADER* OptionalHeader;
-	IMAGE_IMPORT_DESCRIPTOR* ImportDescriptor;
-
-	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
-	NTHeaders = (IMAGE_NT_HEADERS*)((char*)PEBuffer + DosHeader->e_lfanew);
-	OptionalHeader = &NTHeaders->OptionalHeader;
-
-	if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
-
-	FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress), &ImportSection);
-	ImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
-	for (; ImportDescriptor->Name; ImportDescriptor++)
-	{
-		void** OriginalFirstThunk = (void**)((char*)PEBuffer + ImportDescriptor->OriginalFirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
-		void** FirstThunk = (void**)((char*)PEBuffer + ImportDescriptor->FirstThunk - ImportSection->VirtualAddress + ImportSection->PointerToRawData);
-
-		if (ModuleCount)
-			(*ModuleCount)++;
-
-		if (!OriginalFirstThunk)
-			OriginalFirstThunk = FirstThunk;
-
-		for (; *OriginalFirstThunk; OriginalFirstThunk++, FirstThunk++)
-			if (ImportCount)
-				(*ImportCount)++;
-	}
-	return STATUS_SUCCESS;
-}
-
-static GeneralErrorCast FindExportByNameMapped(void * PEBuffer, const char * ExportName, void ** ExportAddress)
+static GeneralErrorCast FindExportByNameMapped(void* PEBuffer, const char* ExportName, void** ExportAddress)
 {
 	if (!PEBuffer)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
@@ -440,27 +626,45 @@ static GeneralErrorCast FindExportByNameMapped(void * PEBuffer, const char * Exp
 
 	*ExportAddress = 0;
 
-	IMAGE_DOS_HEADER * DosHeader;
-	IMAGE_NT_HEADERS * NTHeaders;
-	IMAGE_OPTIONAL_HEADER * OptionalHeader;
-	IMAGE_EXPORT_DIRECTORY * ExportDirectory;
+	IMAGE_DOS_HEADER* DosHeader;
+	IMAGE_NT_HEADERS32* NTHeaders32;
+	IMAGE_EXPORT_DIRECTORY* ExportDirectory;
 
 	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
-	NTHeaders = (IMAGE_NT_HEADERS*)((char*)PEBuffer + DosHeader->e_lfanew);
-	OptionalHeader = &NTHeaders->OptionalHeader;
+	NTHeaders32 = (IMAGE_NT_HEADERS32*)((char*)PEBuffer + DosHeader->e_lfanew);
 
-	if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+	if (NTHeaders32->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
+	{
+		IMAGE_OPTIONAL_HEADER64* OptionalHeader;
+		IMAGE_NT_HEADERS64* NTHeaders;
 
-	ExportDirectory = (IMAGE_EXPORT_DIRECTORY*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
+		NTHeaders = ((IMAGE_NT_HEADERS64*)NTHeaders32);
+		OptionalHeader = &NTHeaders->OptionalHeader;
 
-	unsigned long * AddressesOfFunctions = (unsigned long*)((char*)PEBuffer + ExportDirectory->AddressOfFunctions);
-	unsigned long * AddressesOfNames = (unsigned long*)((char*)PEBuffer + ExportDirectory->AddressOfNames);
-	unsigned short * AddressOfOrdinals = (unsigned short*)((char*)PEBuffer + ExportDirectory->AddressOfNameOrdinals);
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		ExportDirectory = (IMAGE_EXPORT_DIRECTORY*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
+	}
+	else
+	{
+		IMAGE_OPTIONAL_HEADER32* OptionalHeader;
+
+		OptionalHeader = &NTHeaders32->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		ExportDirectory = (IMAGE_EXPORT_DIRECTORY*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
+	}
+
+	unsigned long* AddressesOfFunctions = (unsigned long*)((char*)PEBuffer + ExportDirectory->AddressOfFunctions);
+	unsigned long* AddressesOfNames = (unsigned long*)((char*)PEBuffer + ExportDirectory->AddressOfNames);
+	unsigned short* AddressOfOrdinals = (unsigned short*)((char*)PEBuffer + ExportDirectory->AddressOfNameOrdinals);
 
 	for (unsigned long i = 0; i < ExportDirectory->NumberOfNames; i++, AddressesOfNames++, AddressOfOrdinals++)
 	{
-		char * RawExportName = (char*)((char*)PEBuffer + *AddressesOfNames);
+		char* RawExportName = (char*)((char*)PEBuffer + *AddressesOfNames);
 		if (!_stricmp(RawExportName, ExportName))
 		{
 			*ExportAddress = (void*)((char*)PEBuffer + AddressesOfFunctions[*AddressOfOrdinals]);
@@ -480,22 +684,41 @@ static GeneralErrorCast FindExportByNameUnMapped(void* PEBuffer, const char* Exp
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_3) | 1;
 
 	memset(Export, 0, sizeof(UnMappedExportDescriptor));
-	
+
 	IMAGE_DOS_HEADER* DosHeader;
-	IMAGE_NT_HEADERS* NTHeaders;
+	IMAGE_NT_HEADERS32* NTHeaders32;
 	IMAGE_SECTION_HEADER* ExportSection;
-	IMAGE_OPTIONAL_HEADER* OptionalHeader;
 	IMAGE_EXPORT_DIRECTORY* ExportDirectory;
 
 	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
-	NTHeaders = (IMAGE_NT_HEADERS*)((char*)PEBuffer + DosHeader->e_lfanew);
-	OptionalHeader = &NTHeaders->OptionalHeader;
+	NTHeaders32 = (IMAGE_NT_HEADERS32*)((char*)PEBuffer + DosHeader->e_lfanew);
 
-	if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+	if (NTHeaders32->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
+	{
+		IMAGE_OPTIONAL_HEADER64* OptionalHeader;
+		IMAGE_NT_HEADERS64* NTHeaders;
 
-	FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress), &ExportSection);
-	ExportDirectory = (IMAGE_EXPORT_DIRECTORY*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress - ExportSection->VirtualAddress + ExportSection->PointerToRawData);
+		NTHeaders = ((IMAGE_NT_HEADERS64*)NTHeaders32);
+		OptionalHeader = &NTHeaders->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress), &ExportSection);
+		ExportDirectory = (IMAGE_EXPORT_DIRECTORY*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress - ExportSection->VirtualAddress + ExportSection->PointerToRawData);
+	}
+	else
+	{
+		IMAGE_OPTIONAL_HEADER32* OptionalHeader;
+
+		OptionalHeader = &NTHeaders32->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress), &ExportSection);
+		ExportDirectory = (IMAGE_EXPORT_DIRECTORY*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress - ExportSection->VirtualAddress + ExportSection->PointerToRawData);
+	}
 
 	unsigned long* AddressesOfFunctions = (unsigned long*)((char*)PEBuffer + ExportDirectory->AddressOfFunctions - ExportSection->VirtualAddress + ExportSection->PointerToRawData);
 	unsigned long* AddressesOfNames = (unsigned long*)((char*)PEBuffer + ExportDirectory->AddressOfNames - ExportSection->VirtualAddress + ExportSection->PointerToRawData);
@@ -514,7 +737,7 @@ static GeneralErrorCast FindExportByNameUnMapped(void* PEBuffer, const char* Exp
 	return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_NOT_FOUND) | 1;
 }
 
-static GeneralErrorCast FindExportByAddressMapped(void * PEBuffer, void * Address, const char ** ExportName)
+static GeneralErrorCast FindExportByRangeMapped(void* PEBuffer, void* Address, unsigned long long Range, const char** ExportName)
 {
 	if (!PEBuffer)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
@@ -523,29 +746,45 @@ static GeneralErrorCast FindExportByAddressMapped(void * PEBuffer, void * Addres
 	if (!ExportName)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_3) | 1;
 
-	*ExportName = 0;
-
-	IMAGE_DOS_HEADER * DosHeader;
-	IMAGE_NT_HEADERS * NTHeaders;
-	IMAGE_OPTIONAL_HEADER * OptionalHeader;
-	IMAGE_EXPORT_DIRECTORY * ExportDirectory;
+	IMAGE_DOS_HEADER* DosHeader;
+	IMAGE_NT_HEADERS32* NTHeaders32;
+	IMAGE_EXPORT_DIRECTORY* ExportDirectory;
 
 	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
-	NTHeaders = (IMAGE_NT_HEADERS*)((char*)PEBuffer + DosHeader->e_lfanew);
-	OptionalHeader = &NTHeaders->OptionalHeader;
+	NTHeaders32 = (IMAGE_NT_HEADERS32*)((char*)PEBuffer + DosHeader->e_lfanew);
 
-	if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+	if (NTHeaders32->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
+	{
+		IMAGE_OPTIONAL_HEADER64* OptionalHeader;
+		IMAGE_NT_HEADERS64* NTHeaders;
 
-	ExportDirectory = (IMAGE_EXPORT_DIRECTORY*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
+		NTHeaders = ((IMAGE_NT_HEADERS64*)NTHeaders32);
+		OptionalHeader = &NTHeaders->OptionalHeader;
 
-	unsigned long * AddressesOfFunctions = (unsigned long*)((char*)PEBuffer + ExportDirectory->AddressOfFunctions);
-	unsigned long * AddressesOfNames = (unsigned long*)((char*)PEBuffer + ExportDirectory->AddressOfNames);
-	unsigned short * AddressOfOrdinals = (unsigned short*)((char*)PEBuffer + ExportDirectory->AddressOfNameOrdinals);
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		ExportDirectory = (IMAGE_EXPORT_DIRECTORY*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
+	}
+	else
+	{
+		IMAGE_OPTIONAL_HEADER32* OptionalHeader;
+
+		OptionalHeader = &NTHeaders32->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		ExportDirectory = (IMAGE_EXPORT_DIRECTORY*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
+	}
+
+	unsigned long* AddressesOfFunctions = (unsigned long*)((char*)PEBuffer + ExportDirectory->AddressOfFunctions);
+	unsigned long* AddressesOfNames = (unsigned long*)((char*)PEBuffer + ExportDirectory->AddressOfNames);
+	unsigned short* AddressOfOrdinals = (unsigned short*)((char*)PEBuffer + ExportDirectory->AddressOfNameOrdinals);
 
 	for (unsigned long i = 0, ii = 0; i < ExportDirectory->NumberOfFunctions; i++, AddressesOfFunctions++)
 	{
-		if ((void*)((char*)PEBuffer + *AddressesOfFunctions) == Address)
+		if (((char*)PEBuffer + *AddressesOfFunctions) - ((char*)Address) <= Range)
 		{
 			if (ii < ExportDirectory->NumberOfNames)
 			{
@@ -554,16 +793,19 @@ static GeneralErrorCast FindExportByAddressMapped(void * PEBuffer, void * Addres
 			}
 			else
 				*ExportName = 0;
+
 			return STATUS_SUCCESS;
 		}
 		if (ii < ExportDirectory->NumberOfNames)
 			if (i == AddressOfOrdinals[ii])
 				ii++;
 	}
+
+	
 	return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_NOT_FOUND) | 1;
 }
 
-static GeneralErrorCast FindExportByAddressUnMapped(void* PEBuffer, void* Address, const char** ExportName)
+static GeneralErrorCast FindExportByRangeUnMapped(void* PEBuffer, void* Address, unsigned long long Range, const char** ExportName)
 {
 	if (!PEBuffer)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
@@ -572,25 +814,40 @@ static GeneralErrorCast FindExportByAddressUnMapped(void* PEBuffer, void* Addres
 	if (!ExportName)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_3) | 1;
 
-	*ExportName = 0;
-
 	IMAGE_DOS_HEADER* DosHeader;
-	IMAGE_NT_HEADERS* NTHeaders;
-	IMAGE_OPTIONAL_HEADER* OptionalHeader;
+	IMAGE_NT_HEADERS32* NTHeaders32;
 	IMAGE_EXPORT_DIRECTORY* ExportDirectory;
 	IMAGE_SECTION_HEADER* ExportSection;
-	IMAGE_FILE_HEADER* FileHeader;
 
 	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
-	NTHeaders = (IMAGE_NT_HEADERS*)((char*)PEBuffer + DosHeader->e_lfanew);
-	OptionalHeader = &NTHeaders->OptionalHeader;
-	FileHeader = &NTHeaders->FileHeader;
+	NTHeaders32 = (IMAGE_NT_HEADERS32*)((char*)PEBuffer + DosHeader->e_lfanew);
 
-	if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size)
-		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+	if (NTHeaders32->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
+	{
+		IMAGE_OPTIONAL_HEADER64* OptionalHeader;
+		IMAGE_NT_HEADERS64* NTHeaders;
 
-	FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress), &ExportSection);
-	ExportDirectory = (IMAGE_EXPORT_DIRECTORY*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress - ExportSection->VirtualAddress + ExportSection->PointerToRawData);
+		NTHeaders = ((IMAGE_NT_HEADERS64*)NTHeaders32);
+		OptionalHeader = &NTHeaders->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress), &ExportSection);
+		ExportDirectory = (IMAGE_EXPORT_DIRECTORY*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress - ExportSection->VirtualAddress + ExportSection->PointerToRawData);
+	}
+	else
+	{
+		IMAGE_OPTIONAL_HEADER32* OptionalHeader;
+
+		OptionalHeader = &NTHeaders32->OptionalHeader;
+
+		if (!OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size)
+			return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_MAPPED_FILE_SIZE_ZERO) | 1;
+
+		FindAddressSection(PEBuffer, (((char*)PEBuffer) + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress), &ExportSection);
+		ExportDirectory = (IMAGE_EXPORT_DIRECTORY*)((char*)PEBuffer + OptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress - ExportSection->VirtualAddress + ExportSection->PointerToRawData);
+	}
 
 	unsigned long* AddressesOfFunctions = (unsigned long*)((char*)PEBuffer + ExportDirectory->AddressOfFunctions - ExportSection->VirtualAddress + ExportSection->PointerToRawData);
 	unsigned long* AddressesOfNames = (unsigned long*)((char*)PEBuffer + ExportDirectory->AddressOfNames - ExportSection->VirtualAddress + ExportSection->PointerToRawData);
@@ -598,7 +855,7 @@ static GeneralErrorCast FindExportByAddressUnMapped(void* PEBuffer, void* Addres
 
 	for (unsigned long i = 0, ii = 0; i < ExportDirectory->NumberOfFunctions; i++, AddressesOfFunctions++)
 	{
-		if ((void*)((char*)PEBuffer + *AddressesOfFunctions - ExportSection->VirtualAddress + ExportSection->PointerToRawData) == Address)
+		if (((char*)PEBuffer + *AddressesOfFunctions - ExportSection->VirtualAddress + ExportSection->PointerToRawData) - ((char*)Address) <= Range)
 		{
 			if (ii < ExportDirectory->NumberOfNames)
 			{
@@ -616,7 +873,7 @@ static GeneralErrorCast FindExportByAddressUnMapped(void* PEBuffer, void* Addres
 	return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_NOT_FOUND) | 1;
 }
 
-static GeneralErrorCast FindSectionByName(void * PEBuffer, const char * SectionName, IMAGE_SECTION_HEADER ** SectionDescriptor)
+static GeneralErrorCast FindSectionByName(void* PEBuffer, const char* SectionName, IMAGE_SECTION_HEADER** SectionDescriptor)
 {
 	if (!PEBuffer)
 		return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_INVALID_PARAMETER_1) | 1;
@@ -627,16 +884,16 @@ static GeneralErrorCast FindSectionByName(void * PEBuffer, const char * SectionN
 
 	*SectionDescriptor = 0;
 
-	IMAGE_DOS_HEADER * DosHeader;
-	IMAGE_NT_HEADERS * NTHeaders;
-	IMAGE_FILE_HEADER * FileHeader;
-	IMAGE_SECTION_HEADER * SectionHeader;
+	IMAGE_DOS_HEADER* DosHeader;
+	IMAGE_FILE_HEADER* FileHeader;
+	IMAGE_NT_HEADERS32* NTHeaders32;
+	IMAGE_SECTION_HEADER* SectionHeader;
 
 	DosHeader = (IMAGE_DOS_HEADER*)PEBuffer;
-	NTHeaders = (IMAGE_NT_HEADERS*)((char*)PEBuffer + DosHeader->e_lfanew);
-	FileHeader = &NTHeaders->FileHeader;
+	NTHeaders32 = (IMAGE_NT_HEADERS32*)((char*)PEBuffer + DosHeader->e_lfanew);
+	FileHeader = &NTHeaders32->FileHeader;
 
-	SectionHeader = IMAGE_FIRST_SECTION(NTHeaders);
+	SectionHeader = IMAGE_FIRST_SECTION(NTHeaders32);
 	for (unsigned long i = 0; i < FileHeader->NumberOfSections; i++, SectionHeader++)
 	{
 		if (!_stricmp((const char*)SectionHeader->Name, SectionName))
@@ -645,6 +902,7 @@ static GeneralErrorCast FindSectionByName(void * PEBuffer, const char * SectionN
 			return STATUS_SUCCESS;
 		}
 	}
+
 	return GENERAL_ERROR_ASSEMBLE(GENERAL_ERROR_HEADER_PEDISECTOR, STATUS_NOT_FOUND) | 1;
 }
 
