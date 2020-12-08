@@ -1,8 +1,11 @@
 #include "Imports.h"
 #include "PEDisector.h"
-#include "AMD64Shell.h"
 #include "BasicUtilities.h"
 #include <stdio.h>
+
+#define SHELL_RELATIVITY MainRelativity
+
+#include "x86_x64Shell.h"
 
 int main(unsigned long Count, const char ** Args)
 {
@@ -17,7 +20,12 @@ int main(unsigned long Count, const char ** Args)
 	HANDLE FileHandle;
 	HMODULE Kernel32;
 
-	unsigned long Relativity;
+	unsigned long MainRelativity;
+	unsigned long RelativityCP1;
+	unsigned long RelativityCP2;
+	unsigned long RelativityCP3;
+	unsigned long RelativityCP4;
+
 	unsigned long FileSize;
 	void* ImportLocation;
 	char Path[MAX_PATH];
@@ -58,76 +66,81 @@ int main(unsigned long Count, const char ** Args)
 
 	FileNts->OptionalHeader.SizeOfImage += NewSection->SizeOfRawData;
 
-	Relativity = 0;
 	FindImportHeaderByPENameUnMapped(FileDump, "Kernel32.dll", &Kernel32Imports);
 
 	Kernel32 = GetModuleHandleA("Kernel32.dll");
 	ImportName = ((IMAGE_IMPORT_BY_NAME*)(((char*)FileDump) + (*(unsigned long long*)(((char*)FileDump) + Kernel32Imports.PEImportDescriptor->OriginalFirstThunk - Kernel32Imports.DescriptorSection->VirtualAddress + Kernel32Imports.DescriptorSection->PointerToRawData)) - Kernel32Imports.DescriptorSection->VirtualAddress + Kernel32Imports.DescriptorSection->PointerToRawData));
 
 	ImportLocation = GetProcAddress(Kernel32, ImportName->Name);
-	char Shell[] =
-	{
-		PUSH_QREG(RCX, Relativity),
-		PUSH_QREG(RDX, Relativity),
-		PUSH_QREG(RDI, Relativity),
-		PUSH_QREG(RBX, Relativity),
-		SUB_QREG_DWORD(RSP, (((0x20 + MAX_PATH + sizeof(WIN32_FIND_DATAA)) + 0x8) & ~(0x8 - 1)), Relativity),
-		MOV_QREG_PTR_RIP_DWORD_OFFSET(RDI, Kernel32Imports.PEImportDescriptor->FirstThunk - (NewSection->VirtualAddress + Relativity), Relativity),
-		MOV_DREG_DWORD(ECX, MAX_PATH, Relativity),
-		LEA_QREG_PTR_RSP_BYTE_OFFSET(RSI, 0x20, Relativity),
-		MOV_QREG_QREG(RDX, RSI, Relativity),
-		LEA_QREG_PTR_QREG_DWORD_OFFSET(RAX, RDI, ((char*)GetProcAddress(Kernel32, "GetCurrentDirectoryA") - ((char*)ImportLocation)), Relativity),
-		CALL_QREG(RAX, Relativity),
-		ADD_QREG_QREG(RSI, RAX, Relativity),
-		MOV_QREG_QWORD(RCX, *((void**)"\\ExeMods"), Relativity),
-		MOV_PTR_QREG_QREG(RSI, RCX, Relativity),
-		ADD_QREG_BYTE(RSI, sizeof(void*), Relativity),
-		MOV_QREG_QWORD(RCX, *((void**)"\\*"), Relativity),
-		MOV_PTR_QREG_QREG(RSI, RCX, Relativity),
-		SUB_QREG_QREG(RSI, RAX, Relativity),
-		SUB_QREG_BYTE(RSI, sizeof(void*), Relativity),
-		MOV_QREG_QREG(RCX, RSI, Relativity),
-		LEA_QREG_PTR_RSP_DWORD_OFFSET(RDX, 0x20 + MAX_PATH, Relativity),
-		LEA_QREG_PTR_QREG_DWORD_OFFSET(RAX, RDI, ((char*)GetProcAddress(Kernel32, "FindFirstFileA") - ((char*)ImportLocation)), Relativity),
-		CALL_QREG(RAX, Relativity),
-		MOV_QREG_QREG(RBX, RAX, Relativity),
-		MOV_QREG_QWORD(RAX, *((void**)"ExeMods\\"), Relativity),
-		MOV_PTR_QREG_QREG(RSI, RAX, Relativity),
-		LEA_QREG_PTR_RSP_DWORD_OFFSET(RDX, 0x20 + MAX_PATH + ((unsigned long)GetStructElementOffset(WIN32_FIND_DATAA, cFileName)), Relativity), // 0x8 0x0
-		MOV_QREG_QREG(RCX, RDX, Relativity), // 0x3 0x8
-		CMP_PTR_QREG_BYTE(RCX, '.', Relativity), // 0x3 0x0 0xB
-		JE_RIP_BYTE_OFFSET(0xA, Relativity), // 0x2 0x3 0xE
-		CMP_PTR_QREG_BYTE(RCX, '\0', Relativity), // 0x3 0x0 0x5 0x10
-		INC_QREG(RCX, Relativity), // 0x3 0x3 0x8 0x13
-		JE_RIP_BYTE_OFFSET(0x31, Relativity), // 0x2 0x0 0x6 0xB 0x16
-		JMP_RIP_BYTE_OFFSET(-0xF, Relativity), // 0x2 0x2 0x8 0xD 0x18
-		CMP_PTR_QREG_DWORD(RCX, (*(unsigned long*)".dll"), Relativity), // 0x6 0x4 0x1A
-		JNE_RIP_DWORD_OFFSET(0x21, Relativity), // 0x6 0xA 0x20
-		LEA_QREG_PTR_QREG_BYTE_OFFSET(RAX, RSI, sizeof("ExeMods\\") - 1, Relativity), // 0x4 0x10 0x26
-		PUSH_QREG(RSI, Relativity), // 0x1 0x14 0x2A
-		PUSH_QREG(RDI, Relativity), // 0x1 0x15 0x2B
-		MOV_QREG_QREG(RDI, RAX, Relativity), // 0x3 0x16 0x2C
-		MOV_QREG_QREG(RSI, RDX, Relativity), // 0x3 0x19 0x2F
-		MOV_DREG_DWORD(ECX, sizeof(WIN32_FIND_DATAA::cFileName), Relativity), // 0x5 0x1C 0x32
-		REP_MOVS_BYTE_PTR(Relativity), // 0x2 0x21 0x37
-		POP_QREG(RDI, Relativity), // 0x1 0x23 0x39
-		POP_QREG(RSI, Relativity), // 0x1 0x24 0x3A
-		MOV_QREG_QREG(RCX, RSI, Relativity), // 0x3 0x25 0x3B
-		LEA_QREG_PTR_QREG_DWORD_OFFSET(RAX, RDI, ((char*)GetProcAddress(Kernel32, "LoadLibraryA") - ((char*)ImportLocation)), Relativity), // 0x7 0x28 0x3E
-		CALL_QREG(RAX, Relativity), // 0x2 0x2F 0x45
-		MOV_QREG_QREG(RCX, RBX, Relativity), // 0x3 0x31 0x47
-		LEA_QREG_PTR_RSP_DWORD_OFFSET(RDX, 0x20 + MAX_PATH, Relativity), // 0x8 0x4A
-		LEA_QREG_PTR_QREG_DWORD_OFFSET(RAX, RDI, ((char*)GetProcAddress(Kernel32, "FindNextFileA") - ((char*)ImportLocation)), Relativity), // 0x7 0x52
-		CALL_QREG(RAX, Relativity), // 0x2 0x59
-		TEST_DREG_DREG(EAX, EAX, Relativity), // 0x2 0x5B
-		JNE_RIP_DWORD_OFFSET(-0x63, Relativity), // 0x6 0x5D
-		ADD_QREG_DWORD(RSP, (((0x20 + MAX_PATH) + 0x8) & ~(0x8 - 1)), Relativity),
-		POP_QREG(RBX, Relativity),
-		POP_QREG(RDI, Relativity),
-		POP_QREG(RDX, Relativity),
-		POP_QREG(RCX, Relativity),
-		JMP_RIP_DWORD_OFFSET(FileNts->OptionalHeader.AddressOfEntryPoint - (NewSection->VirtualAddress + Relativity), Relativity),
-	};
+
+	MainRelativity = 0;
+
+	RelativityCP1 = 0;
+	RelativityCP2 = 0;
+	RelativityCP3 = 0;
+	RelativityCP4 = 0;
+	D_C_S(Shell,
+		PUSHQ_R(RCX),
+		PUSHQ_R(RDX),
+		PUSHQ_R(RDI),
+		PUSHQ_R(RBX),
+		PFX_REXW, SUB_RM_D(LR(RSP), (((0x20 + MAX_PATH + sizeof(WIN32_FIND_DATAA)) + 0x8) & ~(0x8 - 1))),
+		PFX_REXW, MOVD_R_RM(R_REL_DO(RDI, Kernel32Imports.PEImportDescriptor->FirstThunk - (NewSection->VirtualAddress + MainRelativity))),
+		MOV_R_D(ECX, MAX_PATH),
+		PFX_REXW, LEAD_R_M(R_MRSP_BO(RSI, 0x20)),
+		PFX_REXW, MOVD_RM_R(LR_R(RDX, RSI)),
+		PFX_REXW, LEAD_R_M(R_MR_DO(RAX, RDI, ((char*)GetProcAddress(Kernel32, "GetCurrentDirectoryA") - ((char*)ImportLocation)))),
+		CALLQ_RM(LR(RAX)),
+		PFX_REXW, ADDD_RM_R(LR_R(RSI, RAX)),
+		MOV_R_Q(RCX, *((void**)"\\ExeMods")),
+		PFX_REXW, MOVD_RM_R(MR_R(RSI, RCX)),
+		PFX_REXW, ADDD_RM_B(LR(RSI), sizeof(void*)),
+		MOV_R_Q(RCX, *((void**)"\\*")),
+		PFX_REXW, MOVD_RM_R(MR_R(RSI, RCX)),
+		PFX_REXW, SUBD_RM_R(LR_R(RSI, RAX)),
+		PFX_REXW, SUBD_RM_B(LR(RSI), sizeof(void*)),
+		PFX_REXW, MOVD_RM_R(LR_R(RCX, RSI)),
+		PFX_REXW, LEAD_R_M(R_MRSP_DO(RDX, 0x20 + MAX_PATH)),
+		PFX_REXW, LEAD_R_M(R_MR_DO(RAX, RDI, ((char*)GetProcAddress(Kernel32, "FindFirstFileA") - ((char*)ImportLocation)))),
+		CALLQ_RM(LR(RAX)),
+		PFX_REXW, MOVD_RM_R(LR_R(RBX, RAX)),
+		MOV_R_Q(RAX, *((void**)"ExeMods\\")),
+		PFX_REXW, MOVD_RM_R(MR_R(RSI, RAX)),
+		R_CP(RelativityCP1, PFX_REXW, LEAD_R_M(R_MRSP_DO(RDX, 0x20 + MAX_PATH + ((unsigned long)GetStructElementOffset(WIN32_FIND_DATAA, cFileName))))),
+		PFX_REXW, MOVD_RM_R(LR_R(RCX, RDX)),
+		R_CP(RelativityCP3, CMP_RM_B(MR(RCX), '.')),
+		JE_RB(RelativityCP2 - MainRelativity),
+		CMP_RM_B(MR(RCX), '\0'),
+		PFX_REXW, INCD_RM(LR(RCX)),
+		JE_RB(RelativityCP4 - MainRelativity),
+		JMP_RB(RelativityCP3 - MainRelativity),
+		R_CP(RelativityCP2, CMP_RM_D(MR(RCX), (*(unsigned long*)".dll"))),
+		JNE_RD(RelativityCP4 - MainRelativity),
+		PFX_REXW, LEAD_R_M(R_MR_BO(RAX, RSI, sizeof("ExeMods\\") - 1)),
+		PUSHQ_R(RSI),
+		PUSHQ_R(RDI),
+		PFX_REXW, MOVD_RM_R(LR_R(RDI, RAX)),
+		PFX_REXW, MOVD_RM_R(LR_R(RSI, RDX)),
+		MOV_RM_D(LR(ECX), sizeof(WIN32_FIND_DATAA::cFileName)),
+		PFX_REPE, MOVSB,
+		POPQ_R(RDI),
+		POPQ_R(RSI),
+		PFX_REXW, MOVD_RM_R(LR_R(RCX, RSI)),
+		PFX_REXW, LEAD_R_M(R_MR_DO(RAX, RDI, ((char*)GetProcAddress(Kernel32, "LoadLibraryA") - ((char*)ImportLocation)))),
+		CALLQ_RM(LR(RAX)),
+		R_CP(RelativityCP4, PFX_REXW, MOVD_RM_R(LR_R(RCX, RBX))),
+		PFX_REXW, LEAD_R_M(R_MRSP_DO(RDX, 0x20 + MAX_PATH)),
+		PFX_REXW, LEAD_R_M(R_MR_DO(RAX, RDI, ((char*)GetProcAddress(Kernel32, "FindNextFileA") - ((char*)ImportLocation)))),
+		CALLQ_RM(LR(RAX)),
+		TESTD_RM_R(LR_R(EAX, EAX)),
+		JNE_RD(RelativityCP1 - MainRelativity),
+		PFX_REXW, ADD_RM_D(LR(RSP), ((0x20 + MAX_PATH) + 0x8) & ~(0x8 - 1)),
+		POPQ_R(RBX),
+		POPQ_R(RDI),
+		POPQ_R(RDX),
+		POPQ_R(RCX),
+		JMP_RD(FileNts->OptionalHeader.AddressOfEntryPoint - (NewSection->VirtualAddress + MainRelativity))
+	);
 
 	memcpy(((char*)FileDump) + NewSection->PointerToRawData, Shell, sizeof(Shell));
 
