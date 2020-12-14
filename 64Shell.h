@@ -346,7 +346,7 @@
 
 #define PFX_0F 0x0F // Extends the instruction set [Size: 0x1]
 
-#define PFX_CS 0x2E // Redirects to cs segment [Size: 0x1]
+#define PFX_CE 0x2E // Relative segment [Size: 0x1]
 
 #define PFX_REX 0x40 // Enables extended 8-bit (example: ah replaced with spl) [Size: 0x1]
 #define PFX_REXB 0x41 // Enables extended RM (example: eax replaced with r8d) [Size: 0x1]
@@ -444,7 +444,7 @@
 
 #define PFX_0F INSERT_INLINECODE_8_BIT_ARRAY(SHELL_RELATIVITY += 0x01, 0x0F) // Extends the instruction set [Size: 0x1]
 
-#define PFX_CS INSERT_INLINECODE_8_BIT_ARRAY(SHELL_RELATIVITY += 0x01, 0x2E) // Redirects to cs segment [Size: 0x1]
+#define PFX_CE INSERT_INLINECODE_8_BIT_ARRAY(SHELL_RELATIVITY += 0x01, 0x2E) // Relative segment [Size: 0x1]
 
 #define PFX_REX INSERT_INLINECODE_8_BIT_ARRAY(SHELL_RELATIVITY += 0x01, 0x40) // Enables extended 8-bit (example: ah replaced with spl) [Size: 0x1]
 #define PFX_REXB INSERT_INLINECODE_8_BIT_ARRAY(SHELL_RELATIVITY += 0x01, 0x41) // Enables extended RM (example: eax replaced with r8d) [Size: 0x1]
